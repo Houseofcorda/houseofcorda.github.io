@@ -21,6 +21,7 @@ import urllib.request
 
 FEED = "https://jcmjewellery.com/wp-json/wc/store/v1/products?per_page=100&page={}"
 OUT = "site"
+MARKUP = 30          # rupees added to every JCM price
 MIN_PRODUCTS = 100  # safety: if fewer come back, do NOT publish (keeps the old site)
 UA = {"User-Agent": "Mozilla/5.0 (compatible; AlvaXpressCatalog/1.0)"}
 
@@ -87,7 +88,7 @@ def main():
             continue
         seen.add(p["id"])
         pr = p["prices"]
-        price = int(pr["price"]) // 10 ** int(pr["currency_minor_unit"])
+        price = int(pr["price"]) // 10 ** int(pr["currency_minor_unit"]) + MARKUP
         img = p["images"][0] if p.get("images") else {}
         cats = [c["name"] for c in p.get("categories", [])]
         items.append({
