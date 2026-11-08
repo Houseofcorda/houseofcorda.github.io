@@ -1,5 +1,5 @@
 """
-Builds the Alva Xpress catalog from the JCM product feed.
+Builds the House of Corda catalog from the JCM product feed.
 
 Usage:
     python build_site.py              # fetch live from JCM and build into ./site
@@ -23,7 +23,7 @@ FEED = "https://jcmjewellery.com/wp-json/wc/store/v1/products?per_page=100&page=
 OUT = "site"
 MARKUP = 30          # rupees added to every JCM price
 MIN_PRODUCTS = 100  # safety: if fewer come back, do NOT publish (keeps the old site)
-UA = {"User-Agent": "Mozilla/5.0 (compatible; AlvaXpressCatalog/1.0)"}
+UA = {"User-Agent": "Mozilla/5.0 (compatible; HouseOfCordaCatalog/1.0)"}
 
 
 def get(url):
@@ -121,7 +121,7 @@ def main():
             '<!doctype html><html><head><meta charset="utf-8">'
             f'<title>{e(i["name"])}</title>'
             f'<meta property="og:title" content="{e(i["name"])} \u2013 \u20b9{i["price"]:,}">'
-            '<meta property="og:description" content="Alva Xpress \u2013 order on WhatsApp">'
+            '<meta property="og:description" content="House of Corda \u2013 order on WhatsApp">'
             f'<meta property="og:image" content="{e(i["prev"])}">'
             '<meta property="og:type" content="website">'
             '<meta name="twitter:card" content="summary_large_image">'
