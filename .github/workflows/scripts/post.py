@@ -8,6 +8,7 @@ import html
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -21,8 +22,14 @@ def clean(value):
     return "".join(value.split()).strip("\"'")
 
 
+def clean_token(value):
+    """Pull just the token out, even if the whole {"access_token": ...} text was pasted."""
+    m = re.search(r"EAA[A-Za-z0-9]+", value)
+    return m.group(0) if m else clean(value)
+
+
 IG_USER_ID = clean(os.environ["IG_USER_ID"])
-TOKEN = clean(os.environ["IG_ACCESS_TOKEN"])
+TOKEN = clean_token(os.environ["IG_ACCESS_TOKEN"])
 print(f"Token check: length={len(TOKEN)}, starts with EAA={TOKEN.startswith('EAA')}, user id length={len(IG_USER_ID)}")
 MODE = os.environ.get("POST_MODE", "image").lower()      # "image" or "reel"
 RAW_BASE = os.environ.get("RAW_BASE", "")                # https://raw.githubusercontent.com/<user>/<repo>/main
