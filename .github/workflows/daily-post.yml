@@ -34,7 +34,7 @@ jobs:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           POST_MODE: image     # change to "reel" for video with music
           RAW_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}
-        run: python scripts/post.py
+        run: python .github/workflows/scripts/post.py
 
       - name: Save posting history
         run: |
