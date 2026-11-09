@@ -2,7 +2,7 @@ name: Daily Instagram Post
 
 on:
   schedule:
-    - cron: "30 5 * * *"      # 05:30 UTC = 11:00 AM IST / 09:30 AM Dubai. Change as you like.
+    - cron: "30 5 * * *"      # 05:30 UTC = 09:30 AM Dubai / 11:00 AM India
   workflow_dispatch:           # lets you run it manually to test
 
 permissions:
@@ -23,7 +23,7 @@ jobs:
           pip install requests pillow
           if [ "$POST_MODE" = "reel" ]; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
         env:
-          POST_MODE: image     # keep the same value as in the next step
+          POST_MODE: reel
 
       - name: Git identity
         run: |
@@ -34,7 +34,7 @@ jobs:
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
-          POST_MODE: image     # change to "reel" for video with music
+          POST_MODE: reel
           RAW_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}
         run: python .github/workflows/scripts/post.py
 
