@@ -16,7 +16,7 @@ import time
 from io import BytesIO
 
 import requests
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 def clean(value):
     """Remove spaces, line breaks and quotes that sometimes get pasted into secrets by accident."""
@@ -221,6 +221,109 @@ FRAME_MODE = os.environ.get("REEL_FRAME", "blur")   # "blur" = whole product vis
                                                     # "crop" = photo fills the whole 9:16 frame (sides are cropped)
 
 
+HOOK_SECONDS = 4.0                   # animated visual hook at the start of every Reel
+THUMB_OFFSET_MS = 2000               # Instagram uses this frame (inside the hook) as the Reel thumbnail
+HOOK_LINES = ["NEW ARRIVAL", "TODAY'S PICK", "TRENDING NOW", "MUST-HAVE STYLE", "LOVE AT FIRST SIGHT"]
+FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
+]
+MAROON, GOLD, CREAM = (155, 27, 48), (245, 215, 120), (255, 244, 214)
+
+
+def load_font(size):
+    for path in FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def has_glyph(font, ch):
+    """True if the font can draw this character (so we can use the rupee sign safely)."""
+    def render(c):
+        im = Image.new("L", (120, 120), 0)
+        ImageDraw.Draw(im).text((10, 10), c, font=font, fill=255)
+        return im.tobytes()
+    return render(ch) != render("\ue000")
+
+
+def fit_font(text, size, max_w):
+    font = load_font(size)
+    while size > 24 and font.getlength(text) > max_w:
+        size -= 4
+        font = load_font(size)
+    return font
+
+
+def smooth(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
+def build_hook_overlay(price):
+    """Pre-draw the hook: a maroon-and-gold headline banner at the top and a price tag at the bottom."""
+    ov = Image.new("RGBA", (REEL_W, REEL_H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    cx = REEL_W // 2
+
+    headline = random.choice(HOOK_LINES)
+    f_head = fit_font(headline, 84, 880)
+    f_sub = fit_font("HOUSE OF CORDA  \u2022  1 GRAM GOLD", 38, 880)
+    sub = "HOUSE OF CORDA  \u2022  1 GRAM GOLD"
+    hw, sw = f_head.getlength(headline), f_sub.getlength(sub)
+    box_w = max(hw, sw) + 100
+    top, box_h = 270, 210
+    d.rounded_rectangle((cx - box_w / 2, top, cx + box_w / 2, top + box_h), radius=30,
+                        fill=MAROON + (232,), outline=GOLD + (255,), width=4)
+    d.text((cx, top + 78), headline, font=f_head, fill=GOLD + (255,), anchor="mm")
+    d.text((cx, top + 158), sub, font=f_sub, fill=CREAM + (255,), anchor="mm")
+
+    f_price = fit_font("Only \u20b9 0,000", 70, 640)
+    sign = "\u20b9" if has_glyph(f_price, "\u20b9") else "Rs."
+    tag = f"Only {sign}{price:,}"
+    tw = f_price.getlength(tag)
+    pill_cy = 1565
+    d.rounded_rectangle((cx - tw / 2 - 60, pill_cy - 62, cx + tw / 2 + 60, pill_cy + 62), radius=62,
+                        fill=(255, 255, 255, 240), outline=GOLD + (255,), width=4)
+    d.text((cx, pill_cy), tag, font=f_price, fill=MAROON + (255,), anchor="mm")
+    return ov.convert("RGB"), ov.split()[3]
+
+
+def build_shimmer_band():
+    """A soft, slanted band of light that sweeps across the jewellery at the very start."""
+    bw, slant = 320, 0.32
+    strip = Image.new("L", (bw, REEL_H), 0)
+    sd = ImageDraw.Draw(strip)
+    for x in range(bw):
+        v = max(0.0, 1 - abs(x - bw / 2) / (bw / 2))
+        sd.line((x, 0, x, REEL_H), fill=int(255 * v * v * 0.55))
+    out_w = bw + int(REEL_H * slant)
+    return strip.transform((out_w, REEL_H), Image.AFFINE, (1, -slant, int(REEL_H * slant), 0, 1, 0))
+
+
+def apply_hook(frame, t, overlay, alpha, band):
+    """Draw the hook on one frame at time t (seconds)."""
+    if t < 1.6:                                           # shimmer sweep
+        p = smooth((t - 0.2) / 1.3)
+        if 0 < p < 1:
+            x = int(-band.width + (REEL_W + band.width) * p)
+            frame.paste(CREAM, (x, 0), band)
+    if t < HOOK_SECONDS:                                  # headline + price tag
+        e_in = smooth((t - 0.15) / 0.55)
+        e_out = 1 - smooth((t - (HOOK_SECONDS - 0.5)) / 0.5)
+        env = e_in * e_out
+        if env > 0.01:
+            a = alpha.point(lambda v, e=env: int(v * e))
+            frame.paste(overlay, (0, int(70 * (1 - e_in))), a)
+
+
 def build_canvas(img):
     """Compose the 9:16 picture at 1.5x resolution (1620 x 2880) so zooming never softens it."""
     cw, ch = int(REEL_W * SUPERSAMPLE), int(REEL_H * SUPERSAMPLE)
@@ -253,8 +356,8 @@ def build_canvas(img):
     return backdrop
 
 
-def make_reel(img):
-    """Build a 20-second 1080x1920 (9:16) HD Reel: slow smooth zoom-in on the photo + music."""
+def make_reel(img, product):
+    """Build a 20-second 1080x1920 (9:16) HD Reel: 4-second visual hook, slow smooth zoom-in on the photo + music."""
     tracks = glob.glob("music/*.mp3")
     if not tracks:
         sys.exit("Add at least one royalty-free .mp3 file to the music/ folder")
@@ -265,6 +368,8 @@ def make_reel(img):
 
     canvas = build_canvas(img)
     cw, ch = canvas.size
+    overlay, alpha = build_hook_overlay(product["price"])
+    band = build_shimmer_band()
     frames = REEL_SECONDS * REEL_FPS
 
     cmd = [
@@ -284,6 +389,7 @@ def make_reel(img):
         bw, bh = cw / zoom, ch / zoom
         x0, y0 = (cw - bw) / 2, (ch - bh) / 2
         frame = canvas.resize((REEL_W, REEL_H), Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
+        apply_hook(frame, i / REEL_FPS, overlay, alpha, band)
         proc.stdin.write(frame.tobytes())
     proc.stdin.close()
     if proc.wait() != 0:
@@ -294,7 +400,8 @@ def make_reel(img):
 def create_container(caption, image_url=None, video_url=None):
     data = {"caption": caption, "access_token": TOKEN}
     if video_url:
-        data.update({"media_type": "REELS", "video_url": video_url, "share_to_feed": "true"})
+        data.update({"media_type": "REELS", "video_url": video_url, "share_to_feed": "true",
+                     "thumb_offset": str(THUMB_OFFSET_MS)})
     else:
         data["image_url"] = image_url
     r = requests.post(f"{API}/{IG_USER_ID}/media", data=data, timeout=60)
@@ -335,7 +442,7 @@ def main():
     if MODE == "reel":
         photo = load_source_image(product["src"])
         print("Source photo size:", photo.size)
-        video_path = make_reel(photo)
+        video_path = make_reel(photo, product)
         video_url = publish_file_to_repo(video_path)
         container = create_container(caption, video_url=video_url)
     else:
