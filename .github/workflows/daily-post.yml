@@ -2,7 +2,7 @@ name: Daily Instagram Post
 
 on:
   schedule:
-    - cron: "30 5 * * *"      # 05:30 UTC = 11:00 AM IST. Change as you like.
+    - cron: "30 5 * * *"      # 05:30 UTC = 11:00 AM IST / 09:30 AM Dubai. Change as you like.
   workflow_dispatch:           # lets you run it manually to test
 
 permissions:
@@ -20,8 +20,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests
-          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install requests pillow
+          if [ "$POST_MODE" = "reel" ]; then sudo apt-get update && sudo apt-get install -y ffmpeg; fi
+        env:
+          POST_MODE: image     # keep the same value as in the next step
 
       - name: Git identity
         run: |
