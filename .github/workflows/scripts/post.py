@@ -6,6 +6,7 @@ posted yet, builds a caption, and publishes it as an image post or a Reel with m
 import glob
 import html
 import json
+import math
 import os
 import random
 import re
@@ -15,7 +16,7 @@ import time
 from io import BytesIO
 
 import requests
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
 def clean(value):
     """Remove spaces, line breaks and quotes that sometimes get pasted into secrets by accident."""
@@ -83,6 +84,21 @@ def get_json(url):
     raise RuntimeError(f"Could not fetch {url}: {last}")
 
 
+def best_image_url(img):
+    """Return the highest-resolution picture URL the feed offers for this image."""
+    best_w, best_url = 0, img.get("src", "")
+    for part in (img.get("srcset") or "").split(","):
+        bits = part.strip().split()
+        if len(bits) == 2 and bits[1].endswith("w"):
+            try:
+                w = int(bits[1][:-1])
+            except ValueError:
+                continue
+            if w > best_w:
+                best_w, best_url = w, bits[0]
+    return best_url
+
+
 def fetch_products():
     raw, page = [], 1
     while page <= 30:
@@ -108,7 +124,7 @@ def fetch_products():
             "name": html.unescape(p["name"]).strip(),
             "price": price,
             "cat": cats[0] if cats else "",
-            "src": p["images"][0].get("src", ""),
+            "src": best_image_url(p["images"][0]) or p["images"][0].get("src", ""),
         })
     if len(items) < MIN_PRODUCTS:
         sys.exit(f"Only {len(items)} products came back from the feed - stopping.")
@@ -149,8 +165,8 @@ def git(*args):
     subprocess.run(["git", *args], check=True)
 
 
-def prepare_image(src_url, out_path):
-    """Download the product photo, make it a clean JPEG with an Instagram-safe shape."""
+def load_source_image(src_url):
+    """Download the product photo at full resolution as an RGB image (transparency -> white)."""
     r = requests.get(src_url, headers=UA, timeout=60)
     r.raise_for_status()
     img = Image.open(BytesIO(r.content))
@@ -158,10 +174,13 @@ def prepare_image(src_url, out_path):
         img = img.convert("RGBA")
         bg = Image.new("RGB", img.size, (255, 255, 255))
         bg.paste(img, mask=img.split()[-1])
-        img = bg
-    else:
-        img = img.convert("RGB")
+        return bg
+    return img.convert("RGB")
 
+
+def prepare_image(src_url, out_path):
+    """Photo post: clean JPEG with an Instagram-safe shape."""
+    img = load_source_image(src_url)
     w, h = img.size
     ratio = w / h
     if ratio < 0.8 or ratio > 1.91:          # outside Instagram's allowed range -> pad to square
@@ -170,9 +189,9 @@ def prepare_image(src_url, out_path):
         canvas.paste(img, ((side - w) // 2, (side - h) // 2))
         img = canvas
     if max(img.size) > 1440:
-        img.thumbnail((1440, 1440))
+        img.thumbnail((1440, 1440), Image.LANCZOS)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    img.save(out_path, "JPEG", quality=92)
+    img.save(out_path, "JPEG", quality=95)
 
 
 def publish_file_to_repo(path):
@@ -193,8 +212,49 @@ def publish_file_to_repo(path):
     return url
 
 
-def make_reel(image_path):
-    """Turn the photo into an 8-second zoom video with a random track from music/."""
+REEL_SECONDS = 20
+REEL_FPS = 30
+REEL_W, REEL_H = 1080, 1920          # 9:16, full HD vertical
+SUPERSAMPLE = 1.5                    # work at 1.5x size so the zoom stays razor sharp
+MAX_ZOOM = 1.12                      # slow zoom-in: ends 12% closer
+FRAME_MODE = os.environ.get("REEL_FRAME", "blur")   # "blur" = whole product visible on a soft blurred backdrop
+                                                    # "crop" = photo fills the whole 9:16 frame (sides are cropped)
+
+
+def build_canvas(img):
+    """Compose the 9:16 picture at 1.5x resolution (1620 x 2880) so zooming never softens it."""
+    cw, ch = int(REEL_W * SUPERSAMPLE), int(REEL_H * SUPERSAMPLE)
+    w, h = img.size
+
+    # cover-scale the photo over the whole canvas (centre crop)
+    scale = max(cw / w, ch / h)
+    cover = img.resize((max(cw, round(w * scale)), max(ch, round(h * scale))), Image.LANCZOS)
+    left, top = (cover.width - cw) // 2, (cover.height - ch) // 2
+    cover = cover.crop((left, top, left + cw, top + ch))
+    if FRAME_MODE == "crop":
+        return cover
+
+    # blurred backdrop + sharp product photo at full width
+    backdrop = cover.filter(ImageFilter.GaussianBlur(int(40 * SUPERSAMPLE)))
+    backdrop = ImageEnhance.Brightness(backdrop).enhance(0.95)
+    fit = min(cw / w, ch * 0.80 / h)
+    fg = img.resize((round(w * fit), round(h * fit)), Image.LANCZOS)
+    fg = fg.filter(ImageFilter.UnsharpMask(radius=1.6, percent=70, threshold=2))
+    # soft feathered edge (top and bottom) so the photo melts into the backdrop
+    feather = int(70 * SUPERSAMPLE)
+    mask = Image.new("L", fg.size, 255)
+    px = mask.load()
+    for y in range(min(feather, fg.height // 2)):
+        v = int(255 * (y / feather))
+        for x in range(fg.width):
+            px[x, y] = v
+            px[x, fg.height - 1 - y] = v
+    backdrop.paste(fg, ((cw - fg.width) // 2, (ch - fg.height) // 2), mask)
+    return backdrop
+
+
+def make_reel(img):
+    """Build a 20-second 1080x1920 (9:16) HD Reel: slow smooth zoom-in on the photo + music."""
     tracks = glob.glob("music/*.mp3")
     if not tracks:
         sys.exit("Add at least one royalty-free .mp3 file to the music/ folder")
@@ -202,16 +262,32 @@ def make_reel(image_path):
         os.remove(old)
     os.makedirs("reels", exist_ok=True)
     out = f"reels/reel_{int(time.time())}.mp4"
-    vf = (
-        "scale=1080:1920:force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=white,"
-        "zoompan=z='min(zoom+0.0008,1.15)':d=240:s=1080x1920:fps=30,format=yuv420p"
-    )
-    subprocess.run([
-        "ffmpeg", "-y", "-i", image_path, "-i", random.choice(tracks),
-        "-filter_complex", f"[0:v]{vf}[v]", "-map", "[v]", "-map", "1:a",
-        "-t", "8", "-c:v", "libx264", "-c:a", "aac", "-shortest", out,
-    ], check=True)
+
+    canvas = build_canvas(img)
+    cw, ch = canvas.size
+    frames = REEL_SECONDS * REEL_FPS
+
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{REEL_W}x{REEL_H}", "-r", str(REEL_FPS), "-i", "-",
+        "-stream_loop", "-1", "-i", random.choice(tracks),          # loops the music if it is shorter than the Reel
+        "-filter_complex", f"[1:a]afade=t=out:st={REEL_SECONDS - 1.5}:d=1.5[a]",
+        "-map", "0:v", "-map", "[a]", "-t", str(REEL_SECONDS),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p",
+        "-profile:v", "high", "-movflags", "+faststart",
+        "-c:a", "aac", "-b:a", "192k", out,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    for i in range(frames):
+        p = i / (frames - 1)
+        zoom = 1 + (MAX_ZOOM - 1) * (0.5 - 0.5 * math.cos(math.pi * p))   # gentle ease-in-out
+        bw, bh = cw / zoom, ch / zoom
+        x0, y0 = (cw - bw) / 2, (ch - bh) / 2
+        frame = canvas.resize((REEL_W, REEL_H), Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
+        proc.stdin.write(frame.tobytes())
+    proc.stdin.close()
+    if proc.wait() != 0:
+        sys.exit("ffmpeg failed while building the Reel")
     return out
 
 
@@ -256,17 +332,17 @@ def main():
     caption = build_caption(product)
     print("Posting:", product["name"], "| price:", product["price"], "| mode:", MODE)
 
-    for old in glob.glob("posts/*.jpg"):
-        os.remove(old)
-    image_path = f"posts/post_{int(time.time())}.jpg"
-    prepare_image(product["src"], image_path)
-
     if MODE == "reel":
-        video_path = make_reel(image_path)
-        os.remove(image_path)
+        photo = load_source_image(product["src"])
+        print("Source photo size:", photo.size)
+        video_path = make_reel(photo)
         video_url = publish_file_to_repo(video_path)
         container = create_container(caption, video_url=video_url)
     else:
+        for old in glob.glob("posts/*.jpg"):
+            os.remove(old)
+        image_path = f"posts/post_{int(time.time())}.jpg"
+        prepare_image(product["src"], image_path)
         image_url = publish_file_to_repo(image_path)
         container = create_container(caption, image_url=image_url)
 
