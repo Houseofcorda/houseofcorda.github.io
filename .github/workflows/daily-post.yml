@@ -2,11 +2,16 @@ name: Daily Instagram Post
 
 on:
   schedule:
-    - cron: "30 5 * * *"      # 05:30 UTC = 09:30 AM Dubai / 11:00 AM India
-  workflow_dispatch:           # lets you run it manually to test
+    - cron: "30 5 * * *"       # Reel 1: 05:30 UTC = 09:30 AM Dubai / 11:00 AM India
+    - cron: "30 13 * * *"      # Reel 2: 13:30 UTC = 05:30 PM Dubai / 07:00 PM India
+  workflow_dispatch:            # lets you run it manually to test
 
 permissions:
   contents: write
+
+concurrency:
+  group: instagram-post         # never run two posts at the same time
+  cancel-in-progress: false
 
 jobs:
   post:
