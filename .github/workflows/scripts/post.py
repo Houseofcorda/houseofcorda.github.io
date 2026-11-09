@@ -216,7 +216,7 @@ REEL_SECONDS = 20
 REEL_FPS = 30
 REEL_W, REEL_H = 1080, 1920          # 9:16, full HD vertical
 SUPERSAMPLE = 1.5                    # work at 1.5x size so the zoom stays razor sharp
-MAX_ZOOM = 1.12                      # slow zoom-in: ends 12% closer
+MAX_ZOOM = 1.30                      # zoom-in: ends 30% closer (kept below 1.5 so it never gets soft)
 FRAME_MODE = os.environ.get("REEL_FRAME", "blur")   # "blur" = whole product visible on a soft blurred backdrop
                                                     # "crop" = photo fills the whole 9:16 frame (sides are cropped)
 
