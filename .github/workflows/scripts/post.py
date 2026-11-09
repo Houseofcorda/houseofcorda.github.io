@@ -16,8 +16,14 @@ from io import BytesIO
 import requests
 from PIL import Image
 
-IG_USER_ID = os.environ["IG_USER_ID"]
-TOKEN = os.environ["IG_ACCESS_TOKEN"]
+def clean(value):
+    """Remove spaces, line breaks and quotes that sometimes get pasted into secrets by accident."""
+    return "".join(value.split()).strip("\"'")
+
+
+IG_USER_ID = clean(os.environ["IG_USER_ID"])
+TOKEN = clean(os.environ["IG_ACCESS_TOKEN"])
+print(f"Token check: length={len(TOKEN)}, starts with EAA={TOKEN.startswith('EAA')}, user id length={len(IG_USER_ID)}")
 MODE = os.environ.get("POST_MODE", "image").lower()      # "image" or "reel"
 RAW_BASE = os.environ.get("RAW_BASE", "")                # https://raw.githubusercontent.com/<user>/<repo>/main
 API = "https://graph.facebook.com/v21.0"
