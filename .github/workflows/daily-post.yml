@@ -2,9 +2,10 @@ name: Daily Instagram Post
 
 on:
   schedule:
-    - cron: "30 5 * * *"       # Reel 1: 05:30 UTC = 09:30 AM Dubai / 11:00 AM India
-    - cron: "30 13 * * *"      # Reel 2: 13:30 UTC = 05:30 PM Dubai / 07:00 PM India
-  workflow_dispatch:            # lets you run it manually to test
+    # The job starts about 30 minutes early, builds the Reel, then waits and posts at the exact time.
+    - cron: "27 1 * * *"       # starts 06:57 AM India  -> posts at 07:30 AM India (02:00 UTC)
+    - cron: "27 10 * * *"      # starts 03:57 PM India  -> posts at 04:30 PM India (11:00 UTC)
+  workflow_dispatch:            # lets you run it by hand to test (posts straight away)
 
 permissions:
   contents: write
@@ -16,6 +17,7 @@ concurrency:
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +43,7 @@ jobs:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           POST_MODE: reel
           RAW_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}
+          POST_AT_UTC: ${{ github.event.schedule == '27 1 * * *' && '02:00' || github.event.schedule == '27 10 * * *' && '11:00' || '' }}
         run: python .github/workflows/scripts/post.py
 
       - name: Save posting history
