@@ -3,6 +3,7 @@ House of Corda - daily Instagram auto-poster.
 Reads the same JCM product feed as build_site.py, picks one product that has not been
 posted yet, builds a caption, and publishes it as an image post or a Reel with music.
 """
+import datetime
 import glob
 import html
 import json
@@ -10,6 +11,7 @@ import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -194,14 +196,34 @@ def prepare_image(src_url, out_path):
     img.save(out_path, "JPEG", quality=95)
 
 
+def media_base():
+    """RAW_BASE ends in the branch name; videos and photos live on a separate 'media' branch next to it."""
+    return RAW_BASE.rsplit("/", 1)[0] + "/media"
+
+
 def publish_file_to_repo(path):
-    """Commit a file so Instagram can fetch it from a public raw.githubusercontent.com URL."""
+    """Put the file on a throw-away 'media' branch (force-pushed each time, so your repo never fills up)
+    and return the public raw.githubusercontent.com URL that Instagram can fetch."""
     if not RAW_BASE:
         sys.exit("RAW_BASE is not set")
-    git("add", path)
-    git("commit", "-m", f"Add {os.path.basename(path)}")
-    git("push")
-    url = f"{RAW_BASE}/{path}"
+    name = os.path.basename(path)
+    work = os.path.join("/tmp", "media_worktree")
+    subprocess.run(["git", "worktree", "remove", "--force", work], capture_output=True)
+    shutil.rmtree(work, ignore_errors=True)
+    subprocess.run(["git", "worktree", "prune"], capture_output=True)
+    git("worktree", "add", "--detach", work)
+    try:
+        subprocess.run(["git", "branch", "-D", "media_tmp"], capture_output=True)   # leftover from an earlier run, if any
+        git("-C", work, "checkout", "--orphan", "media_tmp")
+        subprocess.run(["git", "-C", work, "rm", "-rf", "--quiet", "."], check=False)
+        shutil.copy(path, os.path.join(work, name))
+        git("-C", work, "add", name)
+        git("-C", work, "commit", "-m", f"Media for Instagram: {name}")
+        git("-C", work, "push", "--force", "origin", "media_tmp:media")
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", work], capture_output=True)
+        subprocess.run(["git", "branch", "-D", "media_tmp"], capture_output=True)
+    url = f"{media_base()}/{name}"
     for _ in range(12):                       # wait until the file is publicly reachable
         try:
             if requests.head(url, timeout=20).status_code == 200:
@@ -210,6 +232,28 @@ def publish_file_to_repo(path):
             pass
         time.sleep(5)
     return url
+
+
+PUBLISH_LEAD_SECONDS = 50                # Instagram needs about this long to process a Reel before it goes live
+
+
+def wait_until_post_time():
+    """If POST_AT_UTC (like 02:00) is set, hold the post until that moment so it lands on time,
+    even though the job was started a little early to allow for GitHub's scheduling delays."""
+    target = os.environ.get("POST_AT_UTC", "").strip()
+    if not target:
+        return
+    hh, mm = (int(x) for x in target.split(":"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    goal = now.replace(hour=hh, minute=mm, second=0, microsecond=0) - datetime.timedelta(seconds=PUBLISH_LEAD_SECONDS)
+    secs = (goal - now).total_seconds()
+    if 0 < secs <= 45 * 60:
+        print(f"Ready early - waiting {int(secs)} s so the post goes live at {target} UTC")
+        time.sleep(secs)
+    elif secs <= 0:
+        print("Post time already reached - posting now")
+    else:
+        print("Post time is far away (manual run?) - posting now")
 
 
 REEL_SECONDS = 20
@@ -267,16 +311,16 @@ def smooth(x):
     return x * x * (3 - 2 * x)
 
 
-def build_hook_overlay(price):
-    """Pre-draw the hook: a maroon-and-gold headline banner at the top and a price tag at the bottom."""
+def build_hook_overlay():
+    """Pre-draw the hook: a maroon-and-gold headline banner at the top and a 'Link in Bio' tag at the bottom."""
     ov = Image.new("RGBA", (REEL_W, REEL_H), (0, 0, 0, 0))
     d = ImageDraw.Draw(ov)
     cx = REEL_W // 2
 
     headline = random.choice(HOOK_LINES)
-    f_head = fit_font(headline, 84, 880)
-    f_sub = fit_font("HOUSE OF CORDA  \u2022  1 GRAM GOLD", 38, 880)
     sub = "HOUSE OF CORDA  \u2022  1 GRAM GOLD"
+    f_head = fit_font(headline, 84, 880)
+    f_sub = fit_font(sub, 38, 880)
     hw, sw = f_head.getlength(headline), f_sub.getlength(sub)
     box_w = max(hw, sw) + 100
     top, box_h = 270, 210
@@ -285,14 +329,13 @@ def build_hook_overlay(price):
     d.text((cx, top + 78), headline, font=f_head, fill=GOLD + (255,), anchor="mm")
     d.text((cx, top + 158), sub, font=f_sub, fill=CREAM + (255,), anchor="mm")
 
-    f_price = fit_font("Only \u20b9 0,000", 70, 640)
-    sign = "\u20b9" if has_glyph(f_price, "\u20b9") else "Rs."
-    tag = f"Only {sign}{price:,}"
-    tw = f_price.getlength(tag)
+    tag = "LINK IN BIO"
+    f_tag = fit_font(tag, 70, 640)
+    tw = f_tag.getlength(tag)
     pill_cy = 1565
-    d.rounded_rectangle((cx - tw / 2 - 60, pill_cy - 62, cx + tw / 2 + 60, pill_cy + 62), radius=62,
-                        fill=(255, 255, 255, 240), outline=GOLD + (255,), width=4)
-    d.text((cx, pill_cy), tag, font=f_price, fill=MAROON + (255,), anchor="mm")
+    d.rounded_rectangle((cx - tw / 2 - 70, pill_cy - 62, cx + tw / 2 + 70, pill_cy + 62), radius=62,
+                        fill=MAROON + (240,), outline=GOLD + (255,), width=4)
+    d.text((cx, pill_cy), tag, font=f_tag, fill=GOLD + (255,), anchor="mm")
     return ov.convert("RGB"), ov.split()[3]
 
 
@@ -368,7 +411,7 @@ def make_reel(img, product):
 
     canvas = build_canvas(img)
     cw, ch = canvas.size
-    overlay, alpha = build_hook_overlay(product["price"])
+    overlay, alpha = build_hook_overlay()
     band = build_shimmer_band()
     frames = REEL_SECONDS * REEL_FPS
 
@@ -378,7 +421,7 @@ def make_reel(img, product):
         "-stream_loop", "-1", "-i", random.choice(tracks),          # loops the music if it is shorter than the Reel
         "-filter_complex", f"[1:a]afade=t=out:st={REEL_SECONDS - 1.5}:d=1.5[a]",
         "-map", "0:v", "-map", "[a]", "-t", str(REEL_SECONDS),
-        "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p",
         "-profile:v", "high", "-movflags", "+faststart",
         "-c:a", "aac", "-b:a", "192k", out,
     ]
@@ -444,6 +487,7 @@ def main():
         print("Source photo size:", photo.size)
         video_path = make_reel(photo, product)
         video_url = publish_file_to_repo(video_path)
+        wait_until_post_time()
         container = create_container(caption, video_url=video_url)
     else:
         for old in glob.glob("posts/*.jpg"):
@@ -451,6 +495,7 @@ def main():
         image_path = f"posts/post_{int(time.time())}.jpg"
         prepare_image(product["src"], image_path)
         image_url = publish_file_to_repo(image_path)
+        wait_until_post_time()
         container = create_container(caption, image_url=image_url)
 
     wait_until_ready(container)
