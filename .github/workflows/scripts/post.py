@@ -333,9 +333,9 @@ def build_hook_overlay():
     f_tag = fit_font(tag, 70, 640)
     tw = f_tag.getlength(tag)
     pill_cy = 1565
-    d.rounded_rectangle((cx - tw / 2 - 70, pill_cy - 62, cx + tw / 2 + 70, pill_cy + 62), radius=62,
-                        fill=MAROON + (240,), outline=GOLD + (255,), width=4)
-    d.text((cx, pill_cy), tag, font=f_tag, fill=GOLD + (255,), anchor="mm")
+    d.rounded_rectangle((cx - tw / 2 - 60, pill_cy - 62, cx + tw / 2 + 60, pill_cy + 62), radius=62,
+                        fill=(255, 255, 255, 240), outline=GOLD + (255,), width=4)
+    d.text((cx, pill_cy), tag, font=f_tag, fill=MAROON + (255,), anchor="mm")
     return ov.convert("RGB"), ov.split()[3]
 
 
